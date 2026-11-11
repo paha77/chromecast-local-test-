@@ -1,0 +1,6 @@
+.deps/
+.runtime/
+recordings/*
+!recordings/.gitkeep
+__pycache__/
+.DS_Store
