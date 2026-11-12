@@ -252,6 +252,11 @@ Access log timestamps also use ISO 8601 UTC.
 | POST | `/v1/listener/stop` | Graceful stop; 202, poll until stopped |
 | GET | `/v1/recordings` | Completed recordings with sizes, ISO 8601 UTC modification times and download URLs |
 | GET | `/v1/recordings/{id}` | Download a completed MP4 to the requesting application |
+| DELETE | `/v1/recordings/{id}` | Permanently remove a completed MP4; 204 with no response body |
+
+Deletion requires the same bearer token. Missing, invalid, incomplete or symlinked
+recordings return 404; filesystem errors return 409. Repeating a successful
+deletion returns 404.
 
 Start accepts an optional JSON body, for example `{"filename":"meeting.mp4"}`.
 The filename must have 1–120 ASCII letters, digits, underscores or hyphens
@@ -277,6 +282,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8020/v1/listener
 curl -H "Authorization: Bearer $TOKEN" -X POST http://127.0.0.1:8020/v1/listener/stop
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8020/v1/recordings
 curl -H "Authorization: Bearer $TOKEN" -o copy.mp4 http://127.0.0.1:8020/v1/recordings/cast-XXXXXX.mp4
+curl -H "Authorization: Bearer $TOKEN" -X DELETE http://127.0.0.1:8020/v1/recordings/cast-XXXXXX.mp4
 ```
 
 For Docker Desktop clients, try `http://host.docker.internal:8020` with the same

@@ -65,9 +65,9 @@ while True: time.sleep(0.01)
             assert request("GET", "/v1/listener?token=query-secret", "wrong")[0] == 401
             assert request("GET", "/missing")[0] == 404
             assert request("GET", "/v1/listener")[0] == 200
-            assert request("DELETE", "/v1/listener")[0] == 501
+            assert request("DELETE", "/v1/listener")[0] == 404
         entries = [json.loads(line) for line in access_log.getvalue().splitlines()]
-        assert [entry["status"] for entry in entries] == [401, 404, 200, 501]
+        assert [entry["status"] for entry in entries] == [401, 404, 200, 404]
         assert entries[0]["path"] == "/v1/listener"
         assert entries[0]["method"] == "GET" and entries[0]["client"] == "127.0.0.1"
         assert entries[0]["time"].endswith("Z")
@@ -122,7 +122,14 @@ while True: time.sleep(0.01)
         schema = spec["components"]["schemas"]["Recording"]
         assert set(schema["required"]) == set(recording)
         assert schema["properties"]["modifiedAt"]["format"] == "date-time"
-        custom.unlink()
+        assert "204" in spec["paths"]["/v1/recordings/{id}"]["delete"]["responses"]
+        assert request("DELETE", "/v1/recordings/meeting.mp4", "wrong")[0] == 401
+        assert custom.read_bytes() == b"custom recording"
+        assert request("DELETE", "/v1/recordings/meeting.mp4") == (204, b"")
+        assert not custom.exists()
+        assert request("GET", "/v1/recordings/meeting.mp4")[0] == 404
+        assert json.loads(request("GET", "/v1/recordings")[1]) == {"recordings": []}
+        assert request("DELETE", "/v1/recordings/meeting.mp4")[0] == 404
         complete = root / "recordings/cast-ABC123.mp4"
         complete.write_bytes(b"test recording")
         assert request("GET", "/v1/recordings/cast-ABC123.mp4") == (200, b"test recording")
@@ -131,11 +138,17 @@ while True: time.sleep(0.01)
         assert request("GET", "/v1/recordings/cast-ABC123.mp4")[0] == 404
         assert json.loads(request("GET", "/v1/recordings")[1]) == {"recordings": []}
         assert request("GET", "/v1/recordings/../../src/api.py")[0] == 404
+        assert request("DELETE", "/v1/recordings/cast-ABC123.mp4")[0] == 404
+        assert complete.read_bytes() == b"test recording" and pending.is_dir()
+        assert request("DELETE", "/v1/recordings/../start.sh")[0] == 404
+        assert request("DELETE", "/v1/recordings/%2e%2e%2fstart.sh")[0] == 404
         pending.rmdir()
         complete.unlink()
         complete.symlink_to(root / "start.sh")
         assert request("GET", "/v1/recordings/cast-ABC123.mp4")[0] == 404
-        print("PASS: authentication, lifecycle, finalization, downloads and path confinement")
+        assert request("DELETE", "/v1/recordings/cast-ABC123.mp4")[0] == 404
+        assert complete.is_symlink() and (root / "start.sh").is_file()
+        print("PASS: authentication, lifecycle, finalization, downloads, deletion and path confinement")
     finally:
         listener.stop()
         listener.wait()

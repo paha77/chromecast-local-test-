@@ -78,6 +78,18 @@
       }
     },
     "/v1/recordings/{id}": {
+      "delete": {
+        "operationId": "deleteRecording",
+        "summary": "Permanently delete a completed MP4 from the host",
+        "description": "Only completed recordings can be deleted. Active recordings, incomplete/failed conversions and symbolic links are excluded. Repeating a successful deletion returns 404.",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/RecordingId"}}],
+        "responses": {
+          "204": {"description": "Recording deleted; no response body"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"description": "Recording missing, invalid, or not completed", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+          "409": {"description": "Recording could not be deleted due to a filesystem error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        }
+      },
       "get": {
         "operationId": "downloadRecording",
         "summary": "Copy a completed MP4 to the client",

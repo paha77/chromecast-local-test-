@@ -210,6 +210,30 @@ def handler(listener, token):
             except (OSError, RuntimeError) as error:
                 self.reply(409, {"error": str(error)})
 
+        def do_DELETE(self):
+            if not self.authorized():
+                return
+            path = urlsplit(self.path).path
+            if not path.startswith("/v1/recordings/"):
+                self.reply(404, {"error": "Unknown endpoint"})
+                return
+            name = path.removeprefix("/v1/recordings/")
+            with listener.lock:
+                if not listener.completed(name):
+                    self.reply(404, {"error": "Completed recording not found"})
+                    return
+                try:
+                    (listener.root / "recordings" / name).unlink()
+                except FileNotFoundError:
+                    self.reply(404, {"error": "Completed recording not found"})
+                    return
+                except OSError:
+                    self.reply(409, {"error": "Recording could not be deleted"})
+                    return
+            self.send_response(204)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+
         def log_request(self, code="-", size="-"):
             print(json.dumps({"time": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                               "client": self.client_address[0],
