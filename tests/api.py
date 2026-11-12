@@ -1,5 +1,7 @@
 """Control and download contract with a synthetic launcher, never Chrome."""
 import http.client
+import contextlib
+import io
 import json
 import pathlib
 import sys
@@ -57,7 +59,20 @@ while True: time.sleep(0.01)
         assert set(spec["paths"]) == {
             "/openapi.json", "/v1/listener", "/v1/listener/start",
             "/v1/listener/stop", "/v1/recordings", "/v1/recordings/{id}"}
-        assert request("GET", "/v1/listener", "wrong")[0] == 401
+        access_log = io.StringIO()
+        with contextlib.redirect_stdout(access_log):
+            assert request("GET", "/v1/listener?token=query-secret", "wrong")[0] == 401
+            assert request("GET", "/missing")[0] == 404
+            assert request("GET", "/v1/listener")[0] == 200
+            assert request("DELETE", "/v1/listener")[0] == 501
+        entries = [json.loads(line) for line in access_log.getvalue().splitlines()]
+        assert [entry["status"] for entry in entries] == [401, 404, 200, 501]
+        assert entries[0]["path"] == "/v1/listener"
+        assert entries[0]["method"] == "GET" and entries[0]["client"] == "127.0.0.1"
+        assert entries[0]["time"]
+        assert "query-secret" not in access_log.getvalue()
+        assert "test-token" not in access_log.getvalue()
+        assert "wrong" not in access_log.getvalue()
         assert request("POST", "/v1/listener/start")[0] == 202
         wait_for(lambda: listener.status()["state"] == "listening")
         pid = listener.process.pid

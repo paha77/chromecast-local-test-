@@ -185,6 +185,13 @@ def handler(listener, token):
             except (OSError, RuntimeError) as error:
                 self.reply(409, {"error": str(error)})
 
+        def log_request(self, code="-", size="-"):
+            print(json.dumps({"time": self.log_date_time_string(),
+                              "client": self.client_address[0],
+                              "method": self.command,
+                              "path": urlsplit(self.path).path,
+                              "status": code}), flush=True)
+
         def log_message(self, format, *args):
             pass  # Never log authorization headers or client-supplied paths.
 
