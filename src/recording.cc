@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <spawn.h>
@@ -36,6 +37,26 @@ Recording::Recording(bool video, bool audio, int channels, int sample_rate, bool
   directory_ = created;
   intermediate_ = directory_ / "incoming.mkv";
   output_ = directory_.string() + ".mp4";
+  if (const char* filename = std::getenv("CAST_RECORDING_FILENAME")) {
+    const std::string name(filename);
+    const auto stem = name.size() > 4 ? name.substr(0, name.size() - 4) : "";
+    if (stem.empty() || stem.size() > 120 || name.substr(name.size() - 4) != ".mp4" ||
+        std::string("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789").find(stem[0]) == std::string::npos ||
+        stem.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-") != std::string::npos)
+      throw std::runtime_error("Invalid recording filename");
+    // Reserve the session directory atomically; later sessions get a suffix.
+    std::filesystem::remove(directory_);
+    for (unsigned index = 1;; ++index) {
+      const auto suffix = index == 1 ? std::string() : "-" + std::to_string(index);
+      directory_ = std::filesystem::path("recordings") /
+          (stem.substr(0, 120 - suffix.size()) + suffix);
+      output_ = directory_.string() + ".mp4";
+      if (std::filesystem::symlink_status(output_).type() != std::filesystem::file_type::not_found)
+        continue;
+      if (std::filesystem::create_directory(directory_)) break;
+    }
+    intermediate_ = directory_ / "incoming.mkv";
+  }
 }
 
 Recording::~Recording() { Finish(); }

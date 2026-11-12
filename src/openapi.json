@@ -32,9 +32,17 @@
       "post": {
         "operationId": "startListener",
         "summary": "Start listening for Cast connections",
-        "description": "Idempotent while starting or listening. Returns 409 during shutdown. Acceptance does not guarantee startup success: poll status for listening or failed. Does not initiate a Chrome cast or start recording without a sender.",
+        "requestBody": {
+          "required": false,
+          "content": {"application/json": {"schema": {
+            "type": "object",
+            "properties": {"filename": {"$ref": "#/components/schemas/RecordingId"}}
+          }}}
+        },
+        "description": "Optional JSON filename selects an MP4 basename under recordings; omission keeps random names. Existing filenames/session directories return 409. Subsequent Cast sessions use numbered suffixes, skipping existing names. Idempotent while starting or listening when filename is omitted or matches the current choice. A different filename returns 409; stop the listener before choosing a new filename. Returns 409 during shutdown. Acceptance does not guarantee startup success: poll status for listening or failed. Does not initiate a Chrome cast or start recording without a sender.",
         "responses": {
           "202": {"$ref": "#/components/responses/Accepted"},
+          "400": {"description": "Invalid JSON body or filename", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "409": {"$ref": "#/components/responses/Conflict"}
         }
@@ -98,7 +106,7 @@
       "Conflict": {"description": "Listener is still stopping or a lifecycle operation could not be performed", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
     },
     "schemas": {
-      "RecordingId": {"type": "string", "pattern": "^cast-[A-Za-z0-9]{6}\\.mp4$", "example": "cast-ABC123.mp4"},
+      "RecordingId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,119}\\.mp4$", "example": "meeting.mp4"},
       "Error": {"type": "object", "required": ["error"], "properties": {"error": {"type": "string"}}},
       "ListenerStatus": {
         "type": "object", "required": ["state", "recording", "error"],
@@ -117,12 +125,12 @@
         "example": {"state": "stopped", "recording": null, "error": null}
       },
       "Recording": {
-        "type": "object", "required": ["id", "bytes", "modified_at", "download_url"],
+        "type": "object", "required": ["id", "bytes", "modifiedAt", "downloadUrl"],
         "properties": {
           "id": {"$ref": "#/components/schemas/RecordingId"},
           "bytes": {"type": "integer", "format": "int64", "minimum": 0},
-          "modified_at": {"type": "number", "format": "double", "description": "File modification time in Unix seconds (may include fractional seconds)."},
-          "download_url": {"type": "string", "description": "Path relative to the API origin; requires the same bearer token.", "example": "/v1/recordings/cast-ABC123.mp4"}
+          "modifiedAt": {"type": "string", "format": "date-time", "description": "File modification time in ISO 8601 UTC format.", "example": "2026-11-12T10:30:00Z"},
+          "downloadUrl": {"type": "string", "description": "Path relative to the API origin; requires the same bearer token.", "example": "/v1/recordings/cast-ABC123.mp4"}
         }
       }
     }

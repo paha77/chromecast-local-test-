@@ -241,13 +241,26 @@ configuration. The contract includes authentication, schemas, lifecycle polling,
 errors and binary downloads. Restart an already running API process to enable
 this endpoint. No hosted Swagger UI or external assets are required.
 
+JSON response fields use camelCase. Recording metadata includes `modifiedAt`
+as an ISO 8601 UTC string (ending in `Z`) and `downloadUrl` as a relative path.
+Access log timestamps also use ISO 8601 UTC.
+
 | Method | Path | Result |
 | --- | --- | --- |
 | GET | `/v1/listener` | Listener state, current recording ID/state/bytes, last error |
 | POST | `/v1/listener/start` | Start listening; 202, poll status for readiness |
 | POST | `/v1/listener/stop` | Graceful stop; 202, poll until stopped |
-| GET | `/v1/recordings` | Completed recordings with sizes, Unix modification times and download URLs |
+| GET | `/v1/recordings` | Completed recordings with sizes, ISO 8601 UTC modification times and download URLs |
 | GET | `/v1/recordings/{id}` | Download a completed MP4 to the requesting application |
+
+Start accepts an optional JSON body, for example `{"filename":"meeting.mp4"}`.
+The filename must have 1–120 ASCII letters, digits, underscores or hyphens
+before `.mp4`, starting with a letter or digit. Files stay under `recordings/`.
+Omitting it keeps the random filename. Invalid bodies/names return 400; an
+existing filename or session directory returns 409. Later Cast sessions in the
+same listener run use `meeting-2.mp4`, etc., skipping existing names. Starting
+an already running listener leaves its filename choice unchanged. Posting a
+different filename returns 409; stop the listener before choosing a new filename.
 
 Listener states are `stopped`, `starting`, `listening`, `stopping`, `failed`.
 The current recording is null or has state `recording`, `finalizing`, `failed`;

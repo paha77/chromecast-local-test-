@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
@@ -18,7 +19,7 @@ with tempfile.TemporaryDirectory() as directory:
     root = pathlib.Path(directory)
     (root / "recordings").mkdir()
     (root / "start.sh").write_text('''exec python3 -u -c '
-import signal, sys, time
+import os, signal, sys, time
 def stop(*args):
     print("Finalizing recording", flush=True)
     time.sleep(0.3)
@@ -27,7 +28,7 @@ signal.signal(signal.SIGTERM, stop)
 print("Receiver supervisor ready")
 print("Waiting for Cast connection")
 print("Recording started")
-print("Output filename: recordings/cast-ABC123.mp4")
+print("Output filename: recordings/" + os.environ.get("CAST_RECORDING_FILENAME", "cast-ABC123.mp4"))
 while True: time.sleep(0.01)
 '
 ''')
@@ -36,9 +37,9 @@ while True: time.sleep(0.01)
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
 
-    def request(method, path, token="test-token"):
+    def request(method, path, token="test-token", body=None):
         connection = http.client.HTTPConnection(*server.server_address, timeout=3)
-        connection.request(method, path, headers={"Authorization": f"Bearer {token}"})
+        connection.request(method, path, body=body, headers={"Authorization": f"Bearer {token}"})
         response = connection.getresponse()
         result = response.status, response.read()
         connection.close()
@@ -69,13 +70,17 @@ while True: time.sleep(0.01)
         assert [entry["status"] for entry in entries] == [401, 404, 200, 501]
         assert entries[0]["path"] == "/v1/listener"
         assert entries[0]["method"] == "GET" and entries[0]["client"] == "127.0.0.1"
-        assert entries[0]["time"]
+        assert entries[0]["time"].endswith("Z")
+        assert datetime.fromisoformat(entries[0]["time"].replace("Z", "+00:00")).tzinfo == timezone.utc
         assert "query-secret" not in access_log.getvalue()
         assert "test-token" not in access_log.getvalue()
         assert "wrong" not in access_log.getvalue()
         assert request("POST", "/v1/listener/start")[0] == 202
         wait_for(lambda: listener.status()["state"] == "listening")
         pid = listener.process.pid
+        code, body = request("POST", "/v1/listener/start", body='{"filename":"meeting.mp4"}')
+        assert code == 409 and "stop it" in json.loads(body)["error"]
+        assert listener.process.pid == pid
         request("POST", "/v1/listener/start")
         assert listener.process.pid == pid
         wait_for(lambda: listener.status()["recording"] is not None)
@@ -88,6 +93,36 @@ while True: time.sleep(0.01)
         request("POST", "/v1/listener/stop")
         listener.wait()
         assert listener.status()["state"] == "stopped"
+        for body in ('{"filename":"../escape.mp4"}', '{"filename":""}',
+                     '{"filename":null}', '{"filename":42}', '[]', '{'):
+            assert request("POST", "/v1/listener/start", body=body)[0] == 400
+        custom = root / "recordings/meeting.mp4"
+        custom.write_bytes(b"existing")
+        assert request("POST", "/v1/listener/start", body='{"filename":"meeting.mp4"}')[0] == 409
+        assert custom.read_bytes() == b"existing"
+        custom.unlink()
+        assert request("POST", "/v1/listener/start", body='{"filename":"meeting.mp4"}')[0] == 202
+        wait_for(lambda: listener.status()["recording"] is not None)
+        assert listener.status()["recording"]["id"] == "meeting.mp4"
+        pid = listener.process.pid
+        assert request("POST", "/v1/listener/start", body='{"filename":"meeting.mp4"}')[0] == 202
+        assert request("POST", "/v1/listener/start", body='{"filename":"other.mp4"}')[0] == 409
+        assert listener.process.pid == pid
+        request("POST", "/v1/listener/stop")
+        listener.wait()
+        custom.write_bytes(b"custom recording")
+        assert request("GET", "/v1/recordings/meeting.mp4") == (200, b"custom recording")
+        recording = json.loads(request("GET", "/v1/recordings")[1])["recordings"][0]
+        assert set(recording) == {"id", "bytes", "modifiedAt", "downloadUrl"}
+        assert recording["id"] == "meeting.mp4"
+        assert recording["downloadUrl"] == "/v1/recordings/meeting.mp4"
+        assert recording["modifiedAt"].endswith("Z")
+        modified = datetime.fromisoformat(recording["modifiedAt"].replace("Z", "+00:00"))
+        assert abs(modified.timestamp() - custom.stat().st_mtime) < 0.000001
+        schema = spec["components"]["schemas"]["Recording"]
+        assert set(schema["required"]) == set(recording)
+        assert schema["properties"]["modifiedAt"]["format"] == "date-time"
+        custom.unlink()
         complete = root / "recordings/cast-ABC123.mp4"
         complete.write_bytes(b"test recording")
         assert request("GET", "/v1/recordings/cast-ABC123.mp4") == (200, b"test recording")

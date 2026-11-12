@@ -25,6 +25,11 @@ for MODE in av video h264; do
       -c:v libvpx -g 10 -an fixture.mkv
   fi
   "$TEST_DIR/replay" fixture.mkv
+  if [[ "$MODE" == video ]]; then
+    CAST_RECORDING_FILENAME=meeting.mp4 "$TEST_DIR/replay" fixture.mkv
+    CAST_RECORDING_FILENAME=meeting.mp4 "$TEST_DIR/replay" fixture.mkv
+    [[ -s recordings/meeting.mp4 && -s recordings/meeting-2.mp4 ]]
+  fi
   for FILE in recordings/*.mp4; do
     ffprobe -v error -show_streams -show_format -of json "$FILE" > probe.json
     python3 - "$MODE" <<'PY'

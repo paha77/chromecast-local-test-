@@ -10,11 +10,12 @@ import shutil
 import signal
 import subprocess
 import threading
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-NAME = re.compile(r"cast-[A-Za-z0-9]{6}\.mp4\Z")
+NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,119}\.mp4\Z")
 
 
 class Listener:
@@ -26,6 +27,7 @@ class Listener:
         self.recording = None
         self.error = None
         self.ready = False
+        self.filename = None
 
     def status(self):
         with self.lock:
@@ -38,17 +40,30 @@ class Listener:
                     current["bytes"] = 0
             return {"state": self.state, "recording": current, "error": self.error}
 
-    def start(self):
+    def start(self, filename=None):
+        if filename is not None and (not isinstance(filename, str) or not NAME.fullmatch(filename)):
+            raise ValueError("filename must be an MP4 basename with 1-120 letters, digits, underscores or hyphens")
         with self.lock:
             if self.state in ("starting", "listening"):
+                if filename is not None and filename != self.filename:
+                    raise RuntimeError("Listener is already running with a different filename; stop it before choosing a new filename")
                 return
             if self.state == "stopping":
                 raise RuntimeError("Listener is still finalizing; wait for stopped")
+            if filename and any(os.path.lexists(self.root / "recordings" / name)
+                                for name in (filename, filename.removesuffix(".mp4"))):
+                raise RuntimeError("Recording filename already exists")
+            env = dict(os.environ)
+            env.pop("CAST_RECORDING_FILENAME", None)
+            if filename:
+                env["CAST_RECORDING_FILENAME"] = filename
             self.process = subprocess.Popen(
                 ["/bin/bash", str(self.root / "start.sh")], cwd=self.root,
+                env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1, start_new_session=True)
             self.state, self.error, self.recording = "starting", None, None
+            self.filename = filename
             self.ready = False
             self.watcher = threading.Thread(target=self._watch, args=(self.process,), daemon=True)
             self.watcher.start()
@@ -71,8 +86,8 @@ class Listener:
                     started = True
                 if "Waiting for Cast connection" in line and self.state == "starting":
                     self.state = "listening"
-                match = re.search(r'Output filename: "?recordings/(cast-[A-Za-z0-9]{6}\.mp4)', line)
-                if match and started:
+                match = re.fullmatch(r'Output filename: "?recordings/([^"\n]+)"?', line.strip())
+                if match and NAME.fullmatch(match.group(1)) and started:
                     started = False
                     name = match.group(1)
                     self.recording = {"id": name, "state": "recording"}
@@ -108,12 +123,12 @@ class Listener:
 
     def recordings(self):
         items = []
-        for path in sorted((self.root / "recordings").glob("cast-*.mp4")):
+        for path in sorted((self.root / "recordings").glob("*.mp4")):
             if self.completed(path.name):
                 info = path.stat()
                 items.append({"id": path.name, "bytes": info.st_size,
-                              "modified_at": info.st_mtime,
-                              "download_url": f"/v1/recordings/{path.name}"})
+                              "modifiedAt": datetime.fromtimestamp(info.st_mtime, timezone.utc).isoformat().replace("+00:00", "Z"),
+                              "downloadUrl": f"/v1/recordings/{path.name}"})
         return items
 
     def completed(self, name):
@@ -175,18 +190,28 @@ def handler(listener, token):
             path = urlsplit(self.path).path
             try:
                 if path == "/v1/listener/start":
-                    listener.start()
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if length < 0 or length > 4096:
+                        raise ValueError("Request body must be at most 4096 bytes")
+                    body = json.loads(self.rfile.read(length)) if length else {}
+                    if not isinstance(body, dict):
+                        raise ValueError("Request body must be a JSON object")
+                    if "filename" in body and body["filename"] is None:
+                        raise ValueError("filename must be a string")
+                    listener.start(body.get("filename"))
                 elif path == "/v1/listener/stop":
                     listener.stop()
                 else:
                     self.reply(404, {"error": "Unknown endpoint"})
                     return
                 self.reply(202, listener.status())
+            except (ValueError, UnicodeError) as error:
+                self.reply(400, {"error": str(error)})
             except (OSError, RuntimeError) as error:
                 self.reply(409, {"error": str(error)})
 
         def log_request(self, code="-", size="-"):
-            print(json.dumps({"time": self.log_date_time_string(),
+            print(json.dumps({"time": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                               "client": self.client_address[0],
                               "method": self.command,
                               "path": urlsplit(self.path).path,
@@ -207,7 +232,7 @@ def main():
     runtime.mkdir(exist_ok=True)
     token_path = runtime / "api.token"
     try:
-        with token_path.open("x", opener=lambda path, flags: os.open(path, flags, 0o600)) as output:
+        with open(token_path, "x", opener=lambda path, flags: os.open(path, flags, 0o600)) as output:
             output.write(secrets.token_urlsafe(32) + "\n")
     except FileExistsError:
         pass
