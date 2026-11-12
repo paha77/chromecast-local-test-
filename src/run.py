@@ -16,6 +16,7 @@ def supervise(receiver_command, bonjour_command, lock):
 
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, stop)
+    print("Receiver supervisor ready", flush=True)
     receiver = publisher = None
     receiver_log = reader = None
     try:

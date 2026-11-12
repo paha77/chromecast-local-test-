@@ -198,6 +198,7 @@ bool Recording::Finish() {
   // Keep incoming packets untouched in MKV. Copy H.264 video to MP4;
   // transcode VP8 and Opus for broad player compatibility after graceful close.
   // No shell is used; paths (including spaces) are individual arguments.
+  std::cout << "Finalizing recording" << std::endl;
   std::vector<std::string> args = {
       "ffmpeg", "-hide_banner", "-loglevel", "warning", "-nostdin", "-n",
       "-i", intermediate_.string(), "-map", "0:v?", "-map", "0:a?"};

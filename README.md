@@ -212,6 +212,74 @@ and the receiver exited cleanly. `ffprobe` confirmed both tracks and a full
 FFmpeg decode completed without errors. Video starts at 0.030 seconds and
 audio at 0.000 seconds; subjective lip-sync and long-duration drift were not tested.
 
+## Local control API
+
+Run the persistent native service (Python standard library, no additional dependencies):
+
+```bash
+python3 src/api.py
+```
+
+It listens on `127.0.0.1:8020`, initially with the Cast listener stopped.
+Keep the process running; stopping the listener leaves the API available.
+SIGTERM or Ctrl+C stops both and waits for recording finalization. This command
+does not install a login/background service. Use the API as the single owner
+of the listener; do not run `start.sh` separately at the same time.
+
+On first launch it creates `.runtime/api.token` with mode 0600. Supply its
+contents in `Authorization: Bearer <token>` on every request. Treat this token
+as a credential: it permits listener control and access to all completed recordings.
+No browser CORS access is enabled.
+
+Machine-readable OpenAPI 3.0 documentation is available at
+**http://127.0.0.1:8020/openapi.json** (no authentication required for the
+documentation). Give this URL to a coding agent, or import it into Swagger
+Editor/Postman. For a remote agent, provide the contents of
+[`src/openapi.json`](src/openapi.json); localhost URLs refer to the agent's own
+machine. Supply the bearer token separately through the client's secret
+configuration. The contract includes authentication, schemas, lifecycle polling,
+errors and binary downloads. Restart an already running API process to enable
+this endpoint. No hosted Swagger UI or external assets are required.
+
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/v1/listener` | Listener state, current recording ID/state/bytes, last error |
+| POST | `/v1/listener/start` | Start listening; 202, poll status for readiness |
+| POST | `/v1/listener/stop` | Graceful stop; 202, poll until stopped |
+| GET | `/v1/recordings` | Completed recordings with sizes, Unix modification times and download URLs |
+| GET | `/v1/recordings/{id}` | Download a completed MP4 to the requesting application |
+
+Listener states are `stopped`, `starting`, `listening`, `stopping`, `failed`.
+The current recording is null or has state `recording`, `finalizing`, `failed`;
+bytes describes the intermediate MKV size on disk, which may lag buffered packets.
+Starting an already starting/listening listener and stopping a stopped listener
+are idempotent. Starting during shutdown returns 409. Startup failures are
+reported asynchronously in status. Failed or incomplete conversions are excluded
+from downloads. Polling once per second is sufficient; there is no live media API.
+
+```bash
+TOKEN="$(cat .runtime/api.token)"
+curl -H "Authorization: Bearer $TOKEN" -X POST http://127.0.0.1:8020/v1/listener/start
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8020/v1/listener
+curl -H "Authorization: Bearer $TOKEN" -X POST http://127.0.0.1:8020/v1/listener/stop
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8020/v1/recordings
+curl -H "Authorization: Bearer $TOKEN" -o copy.mp4 http://127.0.0.1:8020/v1/recordings/cast-XXXXXX.mp4
+```
+
+For Docker Desktop clients, try `http://host.docker.internal:8020` with the same
+token. VM networking varies: `--host <host-side-private-interface-address>` and
+`--port 8020` let you bind to a host-only interface when loopback forwarding is
+unavailable. Keep the binding restricted to this Mac and its guests; binding
+to `0.0.0.0` also exposes the plaintext API to reachable network interfaces.
+The API binding does not change loopback-only Cast transport. Container/VM
+connectivity requires testing in your actual runtime.
+See [Docker's host connectivity documentation](https://docs.docker.com/desktop/features/networking/networking-how-tos/).
+
+`python3 tests/api.py` checks the API against a synthetic launcher, including
+authentication, stop/finalization, download eligibility and path confinement.
+After changing the C++ recording overlay, run `./setup.sh` to rebuild the receiver;
+the finalizing event requires that rebuilt binary.
+
 ## Known limitations
 
 - The tested flow uses the isolated Chrome and its fixed-IP device entry,

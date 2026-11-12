@@ -1,0 +1,130 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Local Cast Recorder Control API",
+    "version": "1.0.0",
+    "description": "Control the native Cast listener and copy completed recordings. Read the bearer token from .runtime/api.token on the host and provide it via Authorization: Bearer <token>. Start and stop are asynchronous: poll GET /v1/listener about once per second. Starting is complete when state is listening. Stopping is complete when state is stopped; MP4 conversion can take longer than real time. A failed state or non-null error needs attention. Stopping the listener leaves this API running. Only completed MP4s are listed/downloadable; downloads copy bytes to the client without deleting the original. No request bodies are required."
+  },
+  "servers": [{"url": "/", "description": "Same host and port as this OpenAPI document"}],
+  "security": [{"bearerAuth": []}],
+  "paths": {
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiDocument",
+        "summary": "Get this OpenAPI document without authentication",
+        "security": [],
+        "responses": {
+          "200": {"description": "OpenAPI 3.0.3 document", "content": {"application/json": {"schema": {"type": "object"}}}}
+        }
+      }
+    },
+    "/v1/listener": {
+      "get": {
+        "operationId": "getListenerStatus",
+        "summary": "Monitor listener and current recording",
+        "responses": {
+          "200": {"description": "Current status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ListenerStatus"}}}},
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/v1/listener/start": {
+      "post": {
+        "operationId": "startListener",
+        "summary": "Start listening for Cast connections",
+        "description": "Idempotent while starting or listening. Returns 409 during shutdown. Acceptance does not guarantee startup success: poll status for listening or failed. Does not initiate a Chrome cast or start recording without a sender.",
+        "responses": {
+          "202": {"$ref": "#/components/responses/Accepted"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "409": {"$ref": "#/components/responses/Conflict"}
+        }
+      }
+    },
+    "/v1/listener/stop": {
+      "post": {
+        "operationId": "stopListener",
+        "summary": "Stop listening and finalize the current recording",
+        "description": "Idempotent when already stopped or stopping. Poll status until stopped before restarting. Do not force-kill the receiver during finalization.",
+        "responses": {
+          "202": {"$ref": "#/components/responses/Accepted"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "409": {"$ref": "#/components/responses/Conflict"}
+        }
+      }
+    },
+    "/v1/recordings": {
+      "get": {
+        "operationId": "listRecordings",
+        "summary": "List completed downloadable MP4s",
+        "description": "Excludes active recordings and incomplete/failed conversions. Results are sorted by filename. No pagination.",
+        "responses": {
+          "200": {
+            "description": "Completed recordings",
+            "content": {"application/json": {"schema": {
+              "type": "object", "required": ["recordings"],
+              "properties": {"recordings": {"type": "array", "items": {"$ref": "#/components/schemas/Recording"}}}
+            }}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"}
+        }
+      }
+    },
+    "/v1/recordings/{id}": {
+      "get": {
+        "operationId": "downloadRecording",
+        "summary": "Copy a completed MP4 to the client",
+        "description": "Stream the full response to a destination file. The source remains on the host. Range requests and partial/resumable downloads are not supported.",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/RecordingId"}}],
+        "responses": {
+          "200": {
+            "description": "Completed MP4 bytes",
+            "headers": {
+              "Content-Length": {"description": "File size in bytes", "schema": {"type": "integer", "format": "int64"}},
+              "Content-Disposition": {"description": "Attachment with the recording filename", "schema": {"type": "string"}}
+            },
+            "content": {"video/mp4": {"schema": {"type": "string", "format": "binary"}}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "404": {"description": "Recording missing, invalid, or not completed", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer", "description": "Opaque token from the host's .runtime/api.token file; not a JWT."}},
+    "responses": {
+      "Accepted": {"description": "Request accepted; poll status for completion", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ListenerStatus"}}}},
+      "Unauthorized": {"description": "Missing or invalid bearer token", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
+      "Conflict": {"description": "Listener is still stopping or a lifecycle operation could not be performed", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}}
+    },
+    "schemas": {
+      "RecordingId": {"type": "string", "pattern": "^cast-[A-Za-z0-9]{6}\\.mp4$", "example": "cast-ABC123.mp4"},
+      "Error": {"type": "object", "required": ["error"], "properties": {"error": {"type": "string"}}},
+      "ListenerStatus": {
+        "type": "object", "required": ["state", "recording", "error"],
+        "properties": {
+          "state": {"type": "string", "enum": ["stopped", "starting", "listening", "stopping", "failed"]},
+          "recording": {
+            "type": "object", "nullable": true, "required": ["id", "state", "bytes"],
+            "properties": {
+              "id": {"$ref": "#/components/schemas/RecordingId"},
+              "state": {"type": "string", "enum": ["recording", "finalizing", "failed"]},
+              "bytes": {"type": "integer", "format": "int64", "minimum": 0, "description": "Intermediate MKV size on disk; may lag buffered packets. Not final MP4 size or recording duration."}
+            }
+          },
+          "error": {"type": "string", "nullable": true, "description": "Last observed error; cleared on a new start."}
+        },
+        "example": {"state": "stopped", "recording": null, "error": null}
+      },
+      "Recording": {
+        "type": "object", "required": ["id", "bytes", "modified_at", "download_url"],
+        "properties": {
+          "id": {"$ref": "#/components/schemas/RecordingId"},
+          "bytes": {"type": "integer", "format": "int64", "minimum": 0},
+          "modified_at": {"type": "number", "format": "double", "description": "File modification time in Unix seconds (may include fractional seconds)."},
+          "download_url": {"type": "string", "description": "Path relative to the API origin; requires the same bearer token.", "example": "/v1/recordings/cast-ABC123.mp4"}
+        }
+      }
+    }
+  }
+}
